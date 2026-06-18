@@ -1,7 +1,7 @@
 ---
 name: owasp-audit
 description: >
-  Auditer un fichier, un module ou un bout de code PHP / CI4 selon les critères OWASP Top 10 2021.
+  Auditer un fichier, un module ou un bout de code PHP / CI4 selon les critères OWASP Top 10 2025.
   Utiliser ce skill quand on demande de relire du code pour trouver des failles de sécurité,
   faire un audit de sécurité, chercher des vulnérabilités, vérifier si du code est sécurisé,
   ou produire un rapport d'audit.
@@ -11,7 +11,7 @@ description: >
 
 # Audit de sécurité — PHP / CodeIgniter 4
 
-> Méthode d'analyse basée sur OWASP Top 10 2021.
+> Méthode d'analyse basée sur OWASP Top 10 2025.
 > Pour les corrections, consulter le skill **owasp-secure-code**.
 
 ---
@@ -21,7 +21,7 @@ description: >
 Quand du code est soumis pour audit, l'analyser dans cet ordre :
 
 ### 1. Identifier le périmètre
-- Type de fichier : contrôleur / modèle / vue / config / migration ?
+- Type de fichier : contrôleur / modèle / vue / config / migration / CI/CD ?
 - Données manipulées : utilisateur, paiement, fichier, session, API ?
 - Exposition : endpoint public, privé (auth), admin ?
 
@@ -36,15 +36,17 @@ Pour **chaque point de la grille**, indiquer :
 
 ---
 
-## Grille d'analyse — 10 axes OWASP
+## Grille d'analyse — 10 axes OWASP 2025
 
-### A01 — Contrôles d'accès
+### A01 — Contrôles d'accès (+ SSRF)
 ```
 □ Les routes sont-elles protégées par un filtre auth ?
 □ Le contrôleur vérifie-t-il le rôle de l'utilisateur avant l'action ?
 □ L'isolation tenant est-elle appliquée dans les requêtes ?
 □ Les IDs en URL ne permettent pas d'accéder aux données d'un autre utilisateur ?
 □ Les actions destructives (delete, update) vérifient-elles l'appartenance de la ressource ?
+□ L'application effectue-t-elle des requêtes HTTP vers des URLs fournies par l'utilisateur ?
+□ Ces URLs sont-elles validées contre une liste blanche ? Les IPs privées sont-elles bloquées ?
 ```
 
 **Patterns à rechercher :**
@@ -61,17 +63,73 @@ if ($_POST['is_admin'] == 1) { ... }
 // ✅ Correct
 $objItem = $this->objModel->where('items_user_id', auth()->id())->find($intId);
 if ($objItem === null) throw new PageNotFoundException();
+
+// ❌ SSRF — appel d'URL utilisateur sans validation
+file_get_contents($_POST['url'])
+curl_setopt($ch, CURLOPT_URL, $strUserUrl)   // sans liste blanche
 ```
 
 ---
 
-### A02 — Cryptographie
+### A02 — Configuration de sécurité
+```
+□ CI_ENVIRONMENT est-il en 'production' (pas 'development') ?
+□ Les headers de sécurité sont-ils configurés ?
+□ Le mode debug est-il désactivé ?
+□ Les credentials sont-ils dans .env (pas dans le code) ?
+□ Y a-t-il des tokens, clés API ou mots de passe en dur dans le code ?
+□ CORS est-il correctement restreint ?
+□ Les fonctionnalités inutilisées sont-elles désactivées ?
+```
+
+**Patterns à rechercher :**
+```php
+// ❌ Critique — credentials en dur
+$strPassword = 'admin123';
+$strApiKey   = 'sk-abc123def456';
+define('DB_PASS', 'root');
+
+// ❌ Élevé — debug en production
+CI_ENVIRONMENT = development
+
+// ❌ Élevé — CORS trop permissif
+header('Access-Control-Allow-Origin: *');
+```
+
+---
+
+### A03 — Chaîne d'approvisionnement (Supply Chain)
+```
+□ Le composer.lock est-il présent, versionné et à jour ?
+□ Des versions de packages avec CVE connues sont-elles utilisées ?
+□ La version de PHP est-elle maintenue (>= 8.2) ?
+□ Les packages de dev sont-ils exclus en production (--no-dev) ?
+□ Les noms de packages sont-ils vérifiés (typosquatting) ?
+□ Le pipeline CI/CD est-il sécurisé (accès restreint, audit des actions) ?
+□ Les secrets CI/CD sont-ils dans des variables d'environnement chiffrées ?
+```
+
+**Points à vérifier :**
+```bash
+# Audit des dépendances
+composer audit
+composer show --outdated
+
+# Vérifier les permissions sur le pipeline CI/CD
+# Vérifier que les secrets ne sont pas loggés en clair
+# Vérifier l'intégrité des actions GitHub utilisées (pin sur commit SHA)
+```
+
+---
+
+### A04 — Cryptographie
 ```
 □ Les mots de passe sont-ils hachés avec bcrypt/Argon2 (Shield) ?
 □ Les données sensibles sont-elles stockées en clair en BDD ?
 □ Des algorithmes obsolètes sont-ils utilisés (md5, sha1, base64 pour mots de passe) ?
 □ Les cookies sont-ils Secure + HttpOnly ?
 □ Les communications utilisent-elles HTTPS ?
+□ TLS 1.0/1.1 sont-ils désactivés ?
 ```
 
 **Patterns à rechercher :**
@@ -80,7 +138,6 @@ if ($objItem === null) throw new PageNotFoundException();
 md5($strPassword)
 sha1($strPassword)
 base64_encode($strPassword)
-PASSWORD_DEFAULT avec PHP < 5.5
 
 // ❌ Élevé
 INSERT INTO users SET password='$strPassword'  // en clair
@@ -88,7 +145,7 @@ INSERT INTO users SET password='$strPassword'  // en clair
 
 ---
 
-### A03 — Injection
+### A05 — Injection
 ```
 □ Toutes les requêtes SQL utilisent-elles le Query Builder ou des prepared statements ?
 □ Y a-t-il des concaténations de variables dans des requêtes SQL ?
@@ -115,7 +172,7 @@ shell_exec($_POST['cmd']);
 
 ---
 
-### A04 — Conception
+### A06 — Conception
 ```
 □ Y a-t-il un rate limiting sur les endpoints sensibles (login, reset, API) ?
 □ Les limites métier sont-elles vérifiées côté serveur ?
@@ -132,38 +189,6 @@ catch (\Exception $e) {
 
 // ❌ Pas de limite de tentatives
 public function login() { /* aucun rate limiting */ }
-```
-
----
-
-### A05 — Configuration
-```
-□ CI_ENVIRONMENT est-il en 'production' (pas 'development') ?
-□ Les headers de sécurité sont-ils configurés ?
-□ Le mode debug est-il désactivé ?
-□ Les credentials sont-ils dans .env (pas dans le code) ?
-□ Y a-t-il des tokens, clés API ou mots de passe en dur dans le code ?
-```
-
-**Patterns à rechercher :**
-```php
-// ❌ Critique — credentials en dur
-$strPassword = 'admin123';
-$strApiKey   = 'sk-abc123def456';
-define('DB_PASS', 'root');
-
-// ❌ Élevé — debug en production
-CI_ENVIRONMENT = development
-```
-
----
-
-### A06 — Dépendances
-```
-□ Le composer.lock est-il présent et à jour ?
-□ Des versions de packages avec CVE connues sont-elles utilisées ?
-□ La version de PHP est-elle maintenue (>= 8.2) ?
-□ Les packages de dev sont-ils exclus en production (--no-dev) ?
 ```
 
 ---
@@ -198,6 +223,7 @@ public function logout() {
 □ Les fichiers uploadés sont-ils vérifiés par type MIME réel ?
 □ Les fichiers uploadés sont-ils stockés hors du répertoire public ?
 □ Les noms de fichiers uploadés sont-ils renommés ?
+□ Les dépendances ont-elles des checksums vérifiés (composer.lock) ?
 ```
 
 **Patterns à rechercher :**
@@ -216,31 +242,60 @@ move_uploaded_file($strTmp, FCPATH . 'uploads/' . $strName);
 
 ---
 
-### A09 — Journalisation
+### A09 — Journalisation et alerte
 ```
 □ Les connexions échouées sont-elles loggées avec IP + timestamp ?
 □ Les accès refusés sont-ils loggés ?
 □ Les actions sensibles (suppression, changement de rôle) sont-elles tracées ?
 □ Les logs contiennent-ils assez de contexte (IP, user, action) ?
 □ Les logs sont-ils stockés de manière sécurisée ?
+□ Des alertes automatiques sont-elles configurées sur les anomalies ?
 ```
 
 ---
 
-### A10 — SSRF
+### A10 — Gestion des conditions exceptionnelles
 ```
-□ L'application effectue-t-elle des requêtes HTTP vers des URLs fournies par l'utilisateur ?
-□ Ces URLs sont-elles validées contre une liste blanche ?
-□ Les IPs privées / localhost sont-elles bloquées ?
-□ Les réponses des requêtes HTTP sont-elles filtrées avant d'être renvoyées ?
+□ Les blocs catch affichent-ils des messages d'erreur génériques à l'utilisateur ?
+□ Les exceptions sont-elles loggées en interne (pas en clair en sortie) ?
+□ Y a-t-il des blocs catch vides (exception silencieuse) ?
+□ Les états de transition (paiement, validation) sont-ils vérifiés côté serveur ?
+□ Les cas limites (null, 0, chaîne vide, valeur négative) sont-ils gérés ?
+□ Le comportement en cas d'erreur est-il fail-safe (refus par défaut) ?
 ```
 
 **Patterns à rechercher :**
 ```php
-// ❌ Critique
-file_get_contents($_POST['url'])
-curl_setopt($ch, CURLOPT_URL, $strUserUrl)   // sans validation
-Http::get($strWebhook)   // sans validation
+// ❌ Critique — révèle la structure interne
+catch (\Exception $e) {
+    echo $e->getMessage();   // stack trace, nom de tables, chemins
+    // ou
+    return $this->response->setJSON(['error' => $e->getMessage()]);
+}
+
+// ❌ Élevé — exception silencieuse
+try {
+    $this->verifyPermission($intUserId);
+} catch (\Exception $e) {
+    // rien — la vérification est ignorée silencieusement
+}
+
+// ❌ Élevé — pas de vérification d'état cohérent
+public function confirmOrder(int $intOrderId): void
+{
+    // manque : vérifier que le paiement est bien validé avant confirmation
+    $this->objOrderModel->update($intOrderId, ['status' => 'confirmed']);
+}
+
+// ❌ Moyen — cas limite non géré
+$fltPrixUnitaire = $this->getPrix($intProduitId);
+$fltTotal = $fltMontant / $fltPrixUnitaire;   // division par zéro si prix = 0
+
+// ✅ Correct
+catch (\Exception $e) {
+    log_message('error', '[SECURITY] ' . $e->getMessage());
+    return redirect()->back()->with('strError', 'Une erreur est survenue.');
+}
 ```
 
 ---
@@ -250,20 +305,20 @@ Http::get($strWebhook)   // sans validation
 ```markdown
 # Rapport d'audit de sécurité
 **Fichier :** `app/Modules/Crm/Controllers/ContactsController.php`
-**Date :** 2024-01-15
-**Référentiel :** OWASP Top 10 2021
+**Date :** 2025-01-15
+**Référentiel :** OWASP Top 10 2025
 
 ## Résumé
-| Niveau     | Nombre |
-|------------|--------|
-| 🔴 Critique | 0      |
-| 🟠 Élevé    | 1      |
-| 🟡 Moyen    | 2      |
-| 🟢 Faible   | 1      |
+| Niveau      | Nombre |
+|-------------|--------|
+| 🔴 Critique  | 0      |
+| 🟠 Élevé     | 1      |
+| 🟡 Moyen     | 2      |
+| 🟢 Faible    | 1      |
 
 ## Vulnérabilités détectées
 
-### 🟠 [A03] Injection SQL — Élevé
+### 🟠 [A05] Injection SQL — Élevé
 **Ligne :** 45
 **Code vulnérable :**
 ```php
@@ -275,8 +330,20 @@ $arrData = $this->db->query("SELECT * FROM crm_contacts WHERE contacts_name = '$
 $arrData = $this->db->table('crm_contacts')->where('contacts_name', $strName)->get()->getResult();
 ```
 
+### 🟡 [A10] Exception silencieuse — Moyen
+**Ligne :** 78
+**Code vulnérable :**
+```php
+try {
+    $this->verifyOwnership($intId);
+} catch (\Exception $e) { }
+```
+**Risque :** La vérification d'appartenance peut être contournée silencieusement.
+**Correction :** Logger l'exception et interrompre le traitement.
+
 ## Points conformes
 - ✅ A01 : Filtre auth présent sur toutes les routes
 - ✅ A07 : Shield utilisé pour l'authentification
-- ✅ A02 : Pas d'algorithme de hachage obsolète
+- ✅ A04 : Pas d'algorithme de hachage obsolète
+- ✅ A03 : composer.lock présent et composer audit sans CVE critique
 ```
